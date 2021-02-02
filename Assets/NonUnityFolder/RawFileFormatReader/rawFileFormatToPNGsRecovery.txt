@@ -1,0 +1,205 @@
+import numpy as np
+import sys
+import cv2
+import mmap
+import os
+import io
+import threading
+import time
+from PIL import Image
+from PIL import ImageOps
+
+def BytesToInt32(byte0, byte1, byte2, byte3):
+    integer = byte0 
+    integer = (byte1 << 8) | integer
+    integer = (byte2 << 16) | integer
+    integer = (byte3 << 24) | integer
+    return integer
+
+def BytesArrayToInt32(fourBytesArray):
+    return BytesToInt32(fourBytesArray[0], fourBytesArray[1], fourBytesArray[2], fourBytesArray[3])
+
+class CameraCaptureConfig:
+    def __init__(self, header):
+        index = 0
+        self.headerSize = BytesArrayToInt32(header[index : index + 4])
+        index = index + 4
+        self.imageWidth = BytesArrayToInt32(header[index : index + 4])
+        index = index + 4
+        self.imageHeight = BytesArrayToInt32(header[index : index + 4])
+        index = index + 4
+        self.bytesPerPixel = BytesArrayToInt32(header[index : index + 4])
+        index = index + 4
+        self.numFramesToBuffer = BytesArrayToInt32(header[index : index + 4])
+        index = index + 4
+        self.imageSize = BytesArrayToInt32(header[index : index + 4])
+        index = index + 4
+        self.fileSize = BytesArrayToInt32(header[index : index + 4])
+        index = index + 4
+        assert index == self.headerSize
+
+    def ToString(self):
+        result = ""
+        result = result + "headerSize: " + str(self.headerSize) + "\n"
+        result = result + "imageWidth: " + str(self.imageWidth) + "\n"
+        result = result + "imageHeight: " + str(self.imageHeight) + "\n"
+        result = result + "bytesPerPixel: " + str(self.bytesPerPixel) + "\n"
+        result = result + "numFramesToBuffer: " + str(self.numFramesToBuffer) + "\n"
+        result = result + "imageSize: " + str(self.imageSize) + "\n"
+        result = result + "fileSize: " + str(self.fileSize) + "\n"
+        return result
+
+
+# NOTE(KARAN) : Currently not using this as Image.frombytes is present in the PIL module. If this is to
+# be used in future, make it so that it handles RGBA and RGB
+def ByteToImageMatrix(imageBytes, bytesPerPixel, width, height):
+    image = np.empty((width,height), np.uint32)
+    image.shape = height, width
+    
+    pitch = width * bytesPerPixel
+    for y in range(height):
+        for x in range(width):
+            byteDataIndex = (y * pitch) + (x * bytesPerPixel)
+            r = imageBytes[byteDataIndex]
+            g = imageBytes[byteDataIndex + 1]
+            b = imageBytes[byteDataIndex + 2]
+            #a = imageBytes[byteDataIndex + 3]
+            pixelValue = BytesToInt32(r,g,b,0)
+            invertedY = height - 1 - y
+            image[invertedY, x] = pixelValue 
+    return image
+
+
+def SelectedRawImagesToPNGImages(byteDataWithoutHeader, config, frameOffset, imageNumStart, numImages, savingLocation, filenamePrefix):
+    imageNumEnd = imageNumStart + numImages - 1
+    
+    assert imageNumStart <= imageNumEnd
+    assert imageNumEnd < config.numFramesToBuffer
+
+    #print("Started thread for images: ", str(imageNumStart), "-", str(imageNumEnd))
+    for imageNum in range(imageNumStart, imageNumEnd + 1):
+        start = config.imageSize * imageNum
+        onePastEnd = start + config.imageSize
+        
+        # numpyImagePixels = ByteToImageMatrix(byteDataWithoutHeader[start:onePastEnd], config.bytesPerPixel, config.imageWidth, config.imageHeight)
+        #pilImage = Image.frombuffer(fmt, (config.imageWidth, config.imageHeight), numpyImagePixels, 'raw', fmt, 0, 1)
+        imageBytes = byteDataWithoutHeader[start:onePastEnd]
+
+        if(config.bytesPerPixel == 3):
+            fmt = 'RGB'
+        else:
+            fmt = 'RGBA'        
+        
+        pilImage = Image.frombytes(fmt, (config.imageWidth, config.imageHeight), bytes(imageBytes), 'raw')
+        pilImage = ImageOps.flip(pilImage)
+        
+        pngFilename = filenamePrefix + "_" + str(frameOffset + imageNum) + ".png"
+        pilImage.save(savingLocation + pngFilename)
+        
+
+# NOTE(KARAN) : Currently not using this. Using SelectedRawImagesToPNGImages as it is designed for multithreading.
+# If this is to be used in future, make it so that it handles RGBA and RGB
+def RawToPILImages(rawFilePath):
+    pilImages = []
+    fh = open(rawFilePath, 'rb')
+    readMemory = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+    byteData = bytearray(readMemory)
+
+    headerSize = BytesToInt32(byteData[0], byteData[1], byteData[2], byteData[3])
+    header = byteData[0:headerSize]
+    config = CameraCaptureConfig(header) 
+    
+    for imageNum in range(config.numFramesToBuffer):
+        start = config.headerSize + (config.imageSize * imageNum)
+        onePastEnd = start + config.imageSize
+        numpyImagePixels = ByteToImageMatrix(byteData[start:onePastEnd], config.imageWidth, config.imageHeight)
+        pilImage = Image.frombuffer('RGB', (config.imageWidth, config.imageHeight), numpyImagePixels, 'raw', 'RGB', 0, 1)
+        pilImages.append(pilImage)
+    fh.close()
+    return pilImages
+
+    
+if __name__ == "__main__":
+    numArgs = len(sys.argv)
+    assert numArgs == 3
+    arg = sys.argv[1]
+    maxThreads = int(sys.argv[2])
+    
+    isDir = os.path.isdir(arg)
+    savingLocation = ""
+    rawFilenameWithoutExt = ""
+    rawFilename = ""
+    homeDirectoryPath = ""
+    
+    if isDir:
+        homeDirectoryPath = arg
+        homeDirectoryName = os.path.basename(homeDirectoryPath)
+        savingLocation = arg + "/" + homeDirectoryName + "_convertedToPNGs/"
+    else:
+        homeDirectoryPath = os.path.dirname(arg)
+        rawFilename = os.path.basename(arg)
+        rawFilenameWithoutExt = os.path.splitext(rawFilename)[0]
+        savingLocation = homeDirectoryPath + "/" + rawFilenameWithoutExt + "_convertedToPNGs/"
+
+    if not os.path.exists(savingLocation):
+        os.makedirs(savingLocation)
+
+    filenamesToConvert = []    
+    if isDir:
+        for rawFilename in os.listdir(arg):
+            if rawFilename[-3:] == "raw":
+                filenamesToConvert.append(rawFilename)
+    else:
+        filenamesToConvert.append(rawFilename)
+
+
+    start = time.time()
+    startCopy = start
+    for rawFilename in filenamesToConvert:
+        print("Saving images at: ", savingLocation)
+        print("======================================================================")
+        print("Converting ", rawFilename)
+        rawFilenameWithoutExt = rawFilename.split(".")[0]
+        cameraName,frameStart,frameEnd = rawFilenameWithoutExt.split("_")
+        rawFilePath = os.path.join(homeDirectoryPath, rawFilename)
+
+
+        fh = open(rawFilePath, 'rb')
+        readMemory = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+        byteData = bytearray(readMemory)
+
+        headerSize = BytesToInt32(byteData[0], byteData[1], byteData[2], byteData[3])
+        header = byteData[0:headerSize]
+        config = CameraCaptureConfig(header) 
+        byteDataWithoutHeader = byteData[headerSize:]
+
+        #print("File header: \n", config.ToString())
+
+        numThreads = min(maxThreads, config.numFramesToBuffer)
+        imagesPerThread = config.numFramesToBuffer // numThreads
+
+        currentImageNum = 0
+        threads = []
+        for threadNum in range(numThreads):
+            imagesForThisThread = imagesPerThread
+            if(threadNum == numThreads - 1):
+                imagesForThisThread = imagesForThisThread + (config.numFramesToBuffer % numThreads)
+
+            arguments = (byteDataWithoutHeader, config, int(frameStart), currentImageNum, imagesForThisThread, savingLocation, cameraName)
+            t = threading.Thread(target=SelectedRawImagesToPNGImages, args=arguments)
+            threads.append(t)
+            t.start()    
+            currentImageNum = currentImageNum + imagesForThisThread
+
+        assert currentImageNum == config.numFramesToBuffer
+        print("Active threads: ", str(threading.active_count()))
+        for t in threads:
+            t.join()
+
+        end = time.time()
+        print(rawFilename, " conversion took ", str(end - start), " seconds")
+        print("======================================================================")
+        start = end
+        
+    end = time.time()
+    print("Total time: ", str((end - startCopy)/60), " mins.")

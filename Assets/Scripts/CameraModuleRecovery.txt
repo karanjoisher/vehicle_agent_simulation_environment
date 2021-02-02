@@ -1,0 +1,437 @@
+﻿using System.IO;
+using System.Collections;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using UnityEngine;
+using System.Runtime.Serialization.Formatters.Binary;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System;
+using System.Reflection;
+
+[System.Serializable]
+public class CameraCaptureConfig
+{
+    public int imageWidth;
+    public int imageHeight;
+    public int bytesPerPixel;
+    public int numFramesToBuffer;
+    public int headerSize;
+    public int imageSize;
+    public int fileSize;
+
+    public CameraCaptureConfig()
+    {
+        // TODO(KARAN): Find a better way for this.
+        headerSize = this.ToByteArray().Length;
+    }
+
+    public static CameraCaptureConfig CreateFromJSON(string json)
+    {
+        CameraCaptureConfig result = JsonUtility.FromJson<CameraCaptureConfig>(json);
+        result.imageSize = result.bytesPerPixel * result.imageHeight * result.imageWidth;
+        result.fileSize = result.imageSize * result.numFramesToBuffer;
+        
+        return result;
+    }
+
+    public static byte[] ConvertIntToByte(int a)
+    {
+        byte[] result = new byte[4];
+
+        result[0] = (byte)(a & 0x000000FF);
+        result[1] = (byte)((a >> 8) & 0x000000FF); 
+        result[2] = (byte)((a >> 16) & 0x000000FF);
+        result[3] = (byte)((a >> 24) & 0x000000FF);
+
+        return result;
+    }
+
+    public byte[] ToByteArray()
+    {
+        List<byte> serialized = new List<byte>();
+
+		serialized.AddRange(ConvertIntToByte(headerSize));
+        serialized.AddRange(ConvertIntToByte(imageWidth)) ;
+        serialized.AddRange(ConvertIntToByte(imageHeight));
+        serialized.AddRange(ConvertIntToByte(bytesPerPixel));
+        serialized.AddRange(ConvertIntToByte(numFramesToBuffer));
+        serialized.AddRange(ConvertIntToByte(imageSize));
+        serialized.AddRange(ConvertIntToByte(fileSize));
+
+        return serialized.ToArray();
+        /*
+        BinaryFormatter bf = new BinaryFormatter();
+        using (MemoryStream ms = new MemoryStream())
+			{
+            bf.Serialize(ms, this);
+            return ms.ToArray();
+        }*/
+    }
+
+}
+
+public class CameraModule : MonoBehaviour {
+
+    // Use this for initialization
+    Texture2D image;
+    Rect imageRect;
+
+    public string cameraCaptureConfigJsonFilePath;
+    public CameraCaptureConfig cameraCaptureConfig;
+
+
+    /* NOTE(KARAN) : Variables required for Async version of this script */
+    byte[][] doubleBuffer;
+    bool firstPassOfDoubleBuffering = true;
+    int bufferStartIndex = -1;
+    int currentBufferIndex = 0;
+    int currentBufferArrayIndex = -1;
+    Task dispatchedTask;
+    int frameNumber = 0;
+	FileStream outStream;
+    string dir;
+
+    /* NOTE(KARAN) : Variables required for Sync version of this script */
+    byte[] syncBuffer;
+    int syncBufferIndex;
+
+    /* NOTE(KARAN) : Variables required for Async task version of this script */
+    int bufferIndexToBeSaved = -1;
+    string path = "";
+
+    float[] secondsToFillBuffer;
+    float[] secondsToSaveBuffer;
+    bool discSavingTimeSet = false;
+    string bufferingStats = "";
+    
+    void Start () 
+    {
+        // NOTE(KARAN): Loading JSON file and creating a config object that sets the frame buffer size, image size, etc.
+        if (cameraCaptureConfigJsonFilePath.Length == 0)
+        {
+            cameraCaptureConfigJsonFilePath = Application.dataPath + "\\..\\Data\\cameraCaptureConfig.json";
+        }
+        string json = File.ReadAllText(cameraCaptureConfigJsonFilePath);
+        cameraCaptureConfig = CameraCaptureConfig.CreateFromJSON(json);
+
+
+        // NOTE(KARAN): Setting up of double buffer for the async version.
+        doubleBuffer = new byte[2][];
+        byte[] header = cameraCaptureConfig.ToByteArray();
+        doubleBuffer[0] = new byte[cameraCaptureConfig.fileSize + header.Length];
+        doubleBuffer[1] = new byte[cameraCaptureConfig.fileSize + header.Length];
+        secondsToFillBuffer = new float[2];
+        secondsToSaveBuffer = new float[2];
+
+        //NOTE(KARAN): Setting up the buffer for sync version
+        syncBuffer = new byte[cameraCaptureConfig.fileSize + header.Length];
+
+        //NOTE(KARAN): Adding header to both the files for future decoding to PNG.
+        header.CopyTo(doubleBuffer[0], 0);
+        header.CopyTo(doubleBuffer[1], 0);
+        header.CopyTo(syncBuffer, 0);
+
+        bufferStartIndex = header.Length;
+        currentBufferArrayIndex = bufferStartIndex;
+        syncBufferIndex = bufferStartIndex;
+
+        bufferingStats += "Time to fill buffer, Time to save to disc\n";
+
+        imageRect = new Rect(0, 0, cameraCaptureConfig.imageWidth, cameraCaptureConfig.imageHeight);
+        /* Texture Formats: RGBA32, RGB24*/
+        
+        TextureFormat format = cameraCaptureConfig.bytesPerPixel == 3 ? TextureFormat.RGB24 : TextureFormat.RGBA32;
+        image = new Texture2D(cameraCaptureConfig.imageWidth, cameraCaptureConfig.imageHeight, format, false);
+        GetComponent<Camera>().targetTexture = new RenderTexture(cameraCaptureConfig.imageWidth, cameraCaptureConfig.imageHeight, 0, RenderTextureFormat.ARGB32);
+        dir = Application.dataPath + "\\..\\Data\\CapturedImages\\" + this.name;
+        if (!Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+	}
+	
+	// Update is called once per frame
+	void Update () 
+    {
+		
+	}
+
+
+    string GetTaskStatusString(Task t)
+    {
+        string result;
+        if (t.Status == TaskStatus.Created)
+        {
+            result = "Created";
+        }
+        else if (t.Status == TaskStatus.WaitingForActivation)
+        {
+            result = "Waiting for activation";
+        }
+        else if (t.Status == TaskStatus.WaitingToRun)
+        {
+            result = "Waiting to run";
+        }
+        else if (t.Status == TaskStatus.Running)
+        {
+            result = "Running";
+        }
+        else if (t.Status == TaskStatus.WaitingForChildrenToComplete)
+        {
+            result = "Waiting for children to complete";
+        }
+        else if (t.Status == TaskStatus.RanToCompletion)
+        {
+            result = "Ran to completetion";
+        }
+        else if (t.Status == TaskStatus.Canceled)
+        {
+            result = "Cancelled";
+        }
+        else if (t.Status == TaskStatus.Faulted)
+        {
+            result = "Faulted";
+        }
+        else
+        {
+            result = "Cannot be determined";
+        }
+
+        return result;
+    }
+
+
+    void CaptureCameraSync()
+    {
+        UnityEngine.Profiling.Profiler.BeginSample("Setting render texture");
+        RenderTexture currentRT = RenderTexture.active;
+        RenderTexture.active = GetComponent<Camera>().targetTexture;
+        UnityEngine.Profiling.Profiler.EndSample();
+
+        UnityEngine.Profiling.Profiler.BeginSample("Reading into render texture");
+        image.ReadPixels(imageRect, 0, 0);
+        image.Apply();
+        UnityEngine.Profiling.Profiler.EndSample();
+
+        UnityEngine.Profiling.Profiler.BeginSample("Restoring the previous render texture");
+        RenderTexture.active = currentRT;
+        UnityEngine.Profiling.Profiler.EndSample();
+
+        /*
+         * NOTE(KARAN): Encoding to PNG takes about 117ms i.e. 83% of the frame time is consumed by this operation.
+         * TODO(KARAN): Thus an efficient solution needs to be found for this.
+         * 
+         * NOTE(KARAN): GetRawTextureData() improved the speed.
+         */
+        UnityEngine.Profiling.Profiler.BeginSample("Decoding to byte data");
+
+        /*
+         * NOTE(KARAN): Batching images for later disc storage
+        */
+        byte[] data = image.GetRawTextureData();
+        data.CopyTo(syncBuffer, syncBufferIndex);
+        syncBufferIndex += data.Length;
+        UnityEngine.Profiling.Profiler.EndSample();
+
+
+        UnityEngine.Profiling.Profiler.BeginSample("Saving to disc");
+        if (syncBufferIndex >= syncBuffer.Length)
+        {
+            syncBufferIndex = bufferStartIndex;
+            int bufferedImagesFrameStart = frameNumber - cameraCaptureConfig.numFramesToBuffer + 1;
+            System.IO.File.WriteAllBytes(dir + "\\" + this.name + "_" + bufferedImagesFrameStart + "_" + frameNumber + ".raw", syncBuffer);
+        }
+        UnityEngine.Profiling.Profiler.EndSample();
+        frameNumber++;
+    }
+
+    void CaptureCameraAsync()
+    {
+        UnityEngine.Profiling.Profiler.BeginSample("Setting render texture");
+
+        RenderTexture currentRT = RenderTexture.active;
+        RenderTexture.active = GetComponent<Camera>().targetTexture;
+
+        UnityEngine.Profiling.Profiler.EndSample();
+
+        UnityEngine.Profiling.Profiler.BeginSample("Reading into render texture");
+
+        image.ReadPixels(imageRect, 0, 0);
+        image.Apply();
+
+        UnityEngine.Profiling.Profiler.EndSample();
+
+        UnityEngine.Profiling.Profiler.BeginSample("Restoring the previous render texture");
+
+        RenderTexture.active = currentRT;
+
+        UnityEngine.Profiling.Profiler.EndSample();
+
+        /*
+         * NOTE(KARAN): Encoding to PNG takes about 117ms i.e. 83% of the frame time is consumed by this operation.
+         * TODO(KARAN): Thus an efficient solution needs to be found for this.
+         * 
+         * NOTE(KARAN): GetRawTextureData() improved the speed.
+         */
+        UnityEngine.Profiling.Profiler.BeginSample("Decoding to byte data");
+        /*
+         * NOTE(KARAN): Batching images for later disc storage
+        */
+        byte[] data = image.GetRawTextureData();
+        data.CopyTo(doubleBuffer[currentBufferIndex], currentBufferArrayIndex);
+        currentBufferArrayIndex += data.Length;
+
+        UnityEngine.Profiling.Profiler.EndSample();
+
+
+        UnityEngine.Profiling.Profiler.BeginSample("Saving to disc");
+        /* If current buffer is full */
+        if (currentBufferArrayIndex >= doubleBuffer[currentBufferIndex].Length)
+        {
+            int bufferedImagesFrameStart = frameNumber - cameraCaptureConfig.numFramesToBuffer + 1;
+            string path = dir + "\\" + this.name + "_" + bufferedImagesFrameStart + "_" + frameNumber + ".raw";
+
+            int bufferIndexToBeSaved = currentBufferIndex;
+            currentBufferIndex = (currentBufferIndex + 1) % doubleBuffer.Length;
+            currentBufferArrayIndex = bufferStartIndex;
+
+            UnityEngine.Profiling.Profiler.BeginSample("Waiting for previous file IO to complete");
+
+            if (!firstPassOfDoubleBuffering)
+            {
+				dispatchedTask.Wait();
+				outStream.Close();
+            }
+
+            UnityEngine.Profiling.Profiler.EndSample();
+
+            firstPassOfDoubleBuffering = false;
+
+            UnityEngine.Profiling.Profiler.BeginSample("Creating file");
+
+			int fileStreamBufferSize = cameraCaptureConfig.fileSize/2;
+            outStream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None, bufferSize: fileStreamBufferSize, useAsync: true);
+
+            UnityEngine.Profiling.Profiler.EndSample();
+
+            UnityEngine.Profiling.Profiler.BeginSample("Dispatching File IO requests");
+
+            dispatchedTask = outStream.WriteAsync(doubleBuffer[bufferIndexToBeSaved], 0, doubleBuffer[bufferIndexToBeSaved].Length);
+
+            UnityEngine.Profiling.Profiler.EndSample();
+        }
+
+        UnityEngine.Profiling.Profiler.EndSample();
+        frameNumber++;
+    }
+
+    void WriteBuffer()
+    {
+        //Debug.Log(" : ThreadId " + Thread.CurrentThread.ManagedThreadId + ": WriteBufferStart");
+        System.IO.File.WriteAllBytes(path, doubleBuffer[bufferIndexToBeSaved]);
+        
+        //Debug.Log(" : ThreadId " + Thread.CurrentThread.ManagedThreadId + ": WriteBufferEnd");
+    }
+
+
+    void CaptureCameraAsyncUsingTask()
+    {
+
+        if (!discSavingTimeSet && !firstPassOfDoubleBuffering && dispatchedTask.Status == TaskStatus.RanToCompletion)
+        {
+            discSavingTimeSet = true;
+            secondsToSaveBuffer[bufferIndexToBeSaved] = Time.time - secondsToSaveBuffer[bufferIndexToBeSaved];
+        }
+
+        UnityEngine.Profiling.Profiler.BeginSample("Setting render texture");
+
+        RenderTexture currentRT = RenderTexture.active;
+        RenderTexture.active = GetComponent<Camera>().targetTexture;
+
+        UnityEngine.Profiling.Profiler.EndSample();
+
+        UnityEngine.Profiling.Profiler.BeginSample("Reading into render texture");
+
+        image.ReadPixels(imageRect, 0, 0);
+        image.Apply();
+
+        UnityEngine.Profiling.Profiler.EndSample();
+
+        UnityEngine.Profiling.Profiler.BeginSample("Restoring the previous render texture");
+
+        RenderTexture.active = currentRT;
+
+        UnityEngine.Profiling.Profiler.EndSample();
+
+        /*
+         * NOTE(KARAN): Encoding to PNG takes about 117ms i.e. 83% of the frame time is consumed by this operation.
+         * TODO(KARAN): Thus an efficient solution needs to be found for this.
+         * 
+         * NOTE(KARAN): GetRawTextureData() improved the speed.
+         */
+        UnityEngine.Profiling.Profiler.BeginSample("Decoding to byte data");
+        /*
+         * NOTE(KARAN): Batching images for later disc storage
+        */
+        byte[] data = image.GetRawTextureData();
+        data.CopyTo(doubleBuffer[currentBufferIndex], currentBufferArrayIndex);
+        currentBufferArrayIndex += data.Length;
+        secondsToFillBuffer[currentBufferIndex] += Time.deltaTime;
+        UnityEngine.Profiling.Profiler.EndSample();
+
+
+        UnityEngine.Profiling.Profiler.BeginSample("Saving to disc");
+        /* If current buffer is full */
+        if (currentBufferArrayIndex >= doubleBuffer[currentBufferIndex].Length)
+        {
+            //Debug.Log(name + " : ThreadId " + Thread.CurrentThread.ManagedThreadId + ": Buffers full. Saving to disc...");
+            int bufferedImagesFrameStart = frameNumber - cameraCaptureConfig.numFramesToBuffer + 1;
+            path = dir + "\\" + this.name + "_" + bufferedImagesFrameStart + "_" + frameNumber + ".raw";
+
+            bufferIndexToBeSaved = currentBufferIndex;
+            currentBufferIndex = (currentBufferIndex + 1) % doubleBuffer.Length;
+            currentBufferArrayIndex = bufferStartIndex;
+
+            //Debug.Log(name + " : ThreadId " + Thread.CurrentThread.ManagedThreadId + ": Waiting for previous IO to complete");
+            UnityEngine.Profiling.Profiler.BeginSample("Waiting for previous file IO to complete");
+
+            if (!firstPassOfDoubleBuffering)
+            {
+                dispatchedTask.Wait();
+                bufferingStats += secondsToFillBuffer[bufferIndexToBeSaved] + "," + secondsToSaveBuffer[currentBufferIndex] + "\n"; 
+                secondsToFillBuffer[currentBufferIndex] = 0.0f;
+                secondsToSaveBuffer[currentBufferIndex] = 0.0f;
+            }
+
+            UnityEngine.Profiling.Profiler.EndSample();
+
+            firstPassOfDoubleBuffering = false;
+
+            UnityEngine.Profiling.Profiler.BeginSample("Dispatching File IO requests");
+            secondsToSaveBuffer[bufferIndexToBeSaved] = Time.time;
+            discSavingTimeSet = false;
+            dispatchedTask = new Task(WriteBuffer);
+            dispatchedTask.Start();
+            UnityEngine.Profiling.Profiler.EndSample();
+
+            //Debug.Log(name + " : ThreadId " + Thread.CurrentThread.ManagedThreadId + ": Done dispatching IO"); 
+        }
+
+        UnityEngine.Profiling.Profiler.EndSample();
+        frameNumber++;
+    }
+
+
+    void OnPostRender()
+    {
+        CaptureCameraAsyncUsingTask();
+    }
+
+    void OnApplicationQuit()
+    {
+        string path = Application.dataPath + "\\..\\Data\\" + "bufferingStats_" + DateTimeOffset.Now.ToUnixTimeSeconds() + ".csv";
+        File.WriteAllText(path, bufferingStats);   
+    }
+}
+

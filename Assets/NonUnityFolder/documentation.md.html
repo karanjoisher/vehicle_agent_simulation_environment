@@ -1,0 +1,115 @@
+**Documentation**
+
+RAW FILE FORMAT
+===============================================================================
+
+## Raw Format Description
+Currently the raw file format is:
+
+- **magic value**: A predefined string 'raw' is at the start of each file. This is present for debugging purposes so that we can check the file in a hex editor to see if it is getting created properly, to check whether it is getting parsed properly.
+- **version number**: 0
+- **numImages**: Number of images present in this .raw file
+- **imageWidth**: Width of all images in this .raw file
+- **imageHeight**: Height of all images in this .raw file
+- **bytesPerPixel**: Number of channels in the image. 3 = RGB
+- **imageStartOffset**: The byte in the .raw file from which the first image begins.
+
+
+Code documentation
+===============================================================================
+## rawFileFormatHandler.py
+
+### Command Line Usage
+`>python rawFileFormatHandler.py <path_to_raw_file OR path_to_a_folder> <number_of_threads_to_spawn>`
+
+If path to a file was given say abc.raw, then it will create abc_convertedToPNGs folder in the same directory
+as abc.raw and it will contain all the pngs.
+
+If path to a folder "foo" was given, it will create a folder "foo_convertedToPNGs" in the "foo" directory, and
+it will have PNGs for all the ".raw" files present in foo. 
+
+**Note**: Preferably set `number_of_threads_to_spawn` to the number of cores on your machine.
+
+There are functions in rawFileFormatHandler module that helps to create numpy images from ".raw". Check the "exampleHowToUseRawFileFormatHandler.py" file to know how to use it.
+ 
+### `RawHeader`
+- Holds the raw header data specified in Raw Format Description section.
+
+### `BytesToInt32(byte0, byte1, byte2, byte3)`
+
+- Little Endian conversion of bytes to 32-bit integer
+- byte0 : LSB
+- byte1 : MSB
+ 
+### `BytesArrayToInt32(fourBytesArray)`
+    
+- Little Endian conversion of bytes to 32-bit integer
+- fourBytesArray[0] = LSB
+- fourBytesArray[3] = MSB
+
+### `GetHeaderFromRawBytes(byteData)`
+
+- byteData: bytes read from a .raw file.
+- Extracts header information mentioned in Raw Format Description section.
+- returns RawHeader object
+ 
+### `BytesToNumpy(imageBytes, width, height, bytesPerPixel)`
+
+- imageBytes: All pixels that form the image
+- width, height: image dimensions
+- bytesPerPixel: Number of color channels
+- returns numpy array that represents the image
+
+### `RawToNumpies(byteData, rawHeader)`
+
+- byteData: Bytes read from a .raw file
+- rawHeader: RawHeader object
+- returns an array of numpy images. This array will contain `rawHeader.numImages` number of images.
+
+### `RawToPNGAndSave(byteData, rawHeader, offsetForNaming, imageNumStart, numImages, savingLocation)` 
+
+- byteData: Bytes read from a .raw file
+- rawHeader: RawHeader object
+- offsetForNaming: Add an offset to current image number for creating the filename under which the image will be saved. For e.g if the image 3 is being extracted from byteData, and offsetForNaming is 4; it will be saved as "7.png"
+- imageNumStart: The first image to extract from byteData
+- numImages: Number of images to extract from byteData
+- savingLocation: The folder in which images from imageNumStart upto (imageNumStart + numImages) will be saved.
+
+## CameraModule.cs
+
+### `class Settings`
+    - useDefault: ignores rest of the fields and sets a default value for them.
+    - imageWidth: Width of image. Default = 256px 
+    - imageHeight: Height of image. Default = 256px
+    - bytesPerPixel: Number of color channels. Default = 3. Currently only supports 3.
+    - numFramesToBuffer: Number of images to buffer per .raw file.
+    - captureFPS: Image capturing rate of camera.
+
+### `class RawHeader`
+	- Contains raw header configuration as mentioned in Raw Format Description section.
+	#### `byte[] ToByteArray()`
+	- Returns the data raw header data in little endian format.
+
+### `class Utility`
+	- Contains miscellaneous methods.
+	- `byte[] ConvertIntToByte(int a)`:
+		- Little endian conversion from 32bit int to its constituent bytes
+		- byte[0] = LSB
+		- byte[3] = MSB
+
+		
+### `class DoubleBuffer`
+- Contains two byte[] arrays used in a double buffering scheme
+- capacitySize: size of each of the buffers.
+- buffers: array of two byte[] buffers.
+- fillLevels: amount of data in each buffer.
+- activeBufferIndex: The buffer that is currently being filled.
+- `DoubleBuffer(int _capacitySize)`: Constructs two buffers each of _capacitySize bytes.
+- `void PushData(byte[] data)`: Pushes data to activeBufferIndex buffer.
+- `bool IsFull()`: True if either of the buffer is full.
+- `bool IsNotEmpty()`: True if either of the buffer is not empty.
+- `byte[] FlushAndGetAllData()`: returns byte[] that contains data from both the buffers. Resets both their fillLevels to 0.
+- `byte[] FlushAndGetFilledBuffer()`: returns byte[] that contains data from the inactive/filled buffer. Resets its fillLevel to 0.
+
+
+<!-- Markdeep: --><style class="fallback">body{visibility:hidden;white-space:pre;font-family:monospace}</style><script src="markdeep.min.js"></script><script src="https://casual-effects.com/markdeep/latest/markdeep.min.js?"></script><script>window.alreadyProcessedMarkdeep||(document.body.style.visibility="visible")</script>
