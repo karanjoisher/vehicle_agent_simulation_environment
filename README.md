@@ -1,4 +1,4 @@
-Final year engineering project - "Simulation Environment for Development and Testing of Autonomous Learning Agents" 
+A Simulation Environment for Development and Testing of Autonomous Learning Agents 
 <br>
 This repository only contains important .py and .cs files 
 <br>
