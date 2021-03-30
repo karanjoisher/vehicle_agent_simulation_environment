@@ -1,4 +1,4 @@
-# Simulation Environment for Development and Testing of Autonomous Learning Agents
+# Simulation for Development of Autonomous Driving Agents
 <br>
 A simulation environment for training and testing autonomous driving agents. The environment has features like customizable car parameters and sensors, different terrains, customizable data extraction parameters, and simulated pedestrian and vehicular traffic. The environment can connect to any learning agent via a communication interface.
 <br>
