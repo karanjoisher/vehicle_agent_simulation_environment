@@ -10,13 +10,11 @@ A simulation environment for training and testing autonomous driving agents. The
 ## Results 
 
 ### City Creation with pedestrian movement 
-![image](https://github.com/Omkar-Ranadive/Simulation-Environment/blob/master/Results/Pedestrian%20Movement%20in%20Town.gif)
+![image](https://github.com/karanjoisher/vehicle_agent_simulation_environment/blob/master/Results/Pedestrian%20Movement%20in%20Town.gif)
 
 ### Road editor 
-![image](https://github.com/Omkar-Ranadive/Simulation-Environment/blob/master/Results/RoadEditor.gif)
+![image](https://github.com/karanjoisher/vehicle_agent_simulation_environment/blob/master/Results/RoadEditor.gif)
 
 ### Trained Supervised Agent completely a track in the environment 
 
-![image](https://github.com/Omkar-Ranadive/Simulation-Environment/blob/master/Results/Supervised%20Agent%20with%20Positioning.gif)
-
-
+![image](https://github.com/karanjoisher/vehicle_agent_simulation_environment/blob/master/Results/Supervised%20Agent%20with%20Positioning.gif)
