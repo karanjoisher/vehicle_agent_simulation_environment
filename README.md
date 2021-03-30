@@ -1,5 +1,22 @@
-Final year engineering project - "Simulation Environment for Development and Testing of Autonomous Learning Agents" 
+# Simulation Environment for Development and Testing of Autonomous Learning Agents
 <br>
-This repository only contains important .py and .cs files 
+A simulation environment for training and testing autonomous driving agents. The environment has features like customizable car parameters and sensors, different terrains, customizable data extraction parameters, and simulated pedestrian and vehicular traffic. The environment can connect to any learning agent via a communication interface.
 <br>
-Link to paper: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3367735
+<br>
+<b>Paper:</b> https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3367735
+<br>
+<b>Note:</b> This repository only contains the important .py/.cs files and not the entire source code of the project. 
+
+## Results 
+
+### City Creation with pedestrian movement 
+![image](https://github.com/Omkar-Ranadive/Simulation-Environment/blob/master/Results/Pedestrian%20Movement%20in%20Town.gif)
+
+### Road editor 
+![image](https://github.com/Omkar-Ranadive/Simulation-Environment/blob/master/Results/RoadEditor.gif)
+
+### Trained Supervised Agent completely a track in the environment 
+
+![image](https://github.com/Omkar-Ranadive/Simulation-Environment/blob/master/Results/Supervised%20Agent%20with%20Positioning.gif)
+
+
